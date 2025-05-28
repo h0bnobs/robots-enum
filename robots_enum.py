@@ -1,80 +1,72 @@
 import argparse
 import os
 import time
-from argparse import Namespace
 
 import requests
 from selenium import webdriver
-from selenium.common import WebDriverException
+from selenium.common.exceptions import WebDriverException
 
 
-def parse_args() -> Namespace:
-    """
-    Parses the arguments from the command line.
-    :return: The parsed arguments.
-    """
-    parser = argparse.ArgumentParser(description="robots.txt scraper")
-    parser.add_argument("-u", "--url", dest="url", required=False, help="Url of the robots file")
+def parse_args():
+    parser = argparse.ArgumentParser(description="robots.txt scraper and screenshotter")
+    parser.add_argument("-u", "--url", required=True, help="Base URL (including scheme) of the site")
     return parser.parse_args()
 
 
-def get_screenshot(url: str, counter: int):
-    """
-    Gets a screenshot of the webpage and stores it in the output directory.
-    :param url: The url of the webpage.
-    :param counter: The counter for the screenshot.
-    """
-    url = url.replace("//", "/").replace(":/", "://")
-    print(f'url: {url}')
+def fetch_allowed_paths(base_url):
     try:
-        options = webdriver.ChromeOptions()
-        options.add_argument('--headless')
-        chromedriver = webdriver.Chrome(options=options)
-        chromedriver.set_window_size(1500, 1080)
-        chromedriver.get(url)
-        time.sleep(1)
-        screenshot_path = f"screenshots/{counter}-{url.split('/')[2]}-{url.split('/')[3]}.png"
-        print(f'screenshot path: {screenshot_path}')
-        chromedriver.save_screenshot(screenshot_path)
-    except WebDriverException:
-        #continue
-        print("")
+        resp = requests.get(f"{base_url.rstrip('/')}/robots.txt")
+        resp.raise_for_status()
+    except requests.RequestException as err:
+        raise SystemExit(f"Error fetching robots.txt: {err}")
+    rules = []
+    capture = False
+    for line in resp.text.splitlines():
+        line = line.strip()
+        if line.lower().startswith("user-agent:"):
+            capture = True
+            continue
+        if capture:
+            if not line or line.lower().startswith("sitemap"):
+                break
+            key, _, path = line.partition(":")
+            if key.strip().lower() in ("allow", "disallow"):
+                rules.append(path.strip())
+    return rules
 
 
-    chromedriver.quit()
+def init_driver():
+    opts = webdriver.ChromeOptions()
+    opts.add_argument("--headless")
+    opts.add_argument("--disable-web-security")
+    driver = webdriver.Chrome(options=opts)
+    driver.set_window_size(1500, 1080)
+    return driver
 
 
 def main():
     args = parse_args()
-    url = args.url
     os.makedirs("screenshots", exist_ok=True)
-    try:
-        response = requests.get(f"{url}robots.txt")
-
-        if response.status_code == 200:
-            robots_lines = response.text
-            user_agent_rules = []
-            capture = False
-
-            for line in robots_lines.splitlines():
-                line = line.strip().lower()
-                if line.startswith("user-agent: *"):
-                    capture = True
-                    continue
-                if capture:
-                    if line == "":
-                        break
-                    user_agent_rules.append(line)
-
-            for i in range(0, len(user_agent_rules)):
-                user_agent_rules[i] = user_agent_rules[i].split(': ')[1]
-                get_screenshot(f"{url}{user_agent_rules[i]}", i)
-
-
-    except requests.RequestException as e:
-        print(f"error:\n{e}")
+    paths = fetch_allowed_paths(args.url)
+    if not paths:
+        print("No user-agent rules found.")
+        return
+    print(f"Found {len(paths)} paths, capturing screenshots...")
+    driver = init_driver()
+    for idx, path in enumerate(paths, 1):
+        full_url = f"{args.url.rstrip('/')}/{path.lstrip('/')}"
+        try:
+            driver.get(full_url)
+            time.sleep(1)
+            domain = args.url.split("//", 1)[-1].rstrip('/')
+            filename = f"{idx:02d}-{domain}-{path.strip('/').replace('/', '_')}.png"
+            dest = os.path.join("screenshots", filename)
+            driver.save_screenshot(dest)
+            print(f"{idx}/{len(paths)} -> {dest}")
+        except WebDriverException:
+            print(f"Failed to capture: {full_url}")
+    driver.quit()
 
 
 if __name__ == "__main__":
     main()
-    # url.split('/')[2]
