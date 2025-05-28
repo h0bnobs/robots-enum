@@ -63,8 +63,8 @@ def main():
             dest = os.path.join("screenshots", filename)
             driver.save_screenshot(dest)
             print(f"{idx}/{len(paths)} -> {dest}")
-        except WebDriverException:
-            print(f"Failed to capture: {full_url}")
+        except WebDriverException as e:
+            print(f"Failed to capture {full_url}: {e}")
     driver.quit()
 
 
